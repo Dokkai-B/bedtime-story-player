@@ -1,0 +1,21 @@
+{
+  "name": "bedtime-story-player",
+  "version": "1.0.0",
+  "main": "App.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web"
+  },
+  "dependencies": {
+    "@react-navigation/native": "^6.1.6",
+    "@react-navigation/stack": "^6.3.16",
+    "expo": "^50.0.0",
+    "expo-av": "^13.0.0",
+    "expo-file-system": "^16.0.0",
+    "@react-native-async-storage/async-storage": "^1.21.0",
+    "react": "^18.2.0",
+    "react-native": "^0.73.0"
+  }
+}
