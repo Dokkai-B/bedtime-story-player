@@ -7,7 +7,7 @@ const path = require('path');
 require('dotenv').config();
 
 // AWS SDK v3 imports
-const { S3Client } = require('@aws-sdk/client-s3');
+const { S3Client, ListObjectsV2Command } = require('@aws-sdk/client-s3');
 const { Upload } = require('@aws-sdk/lib-storage');
 
 // Logger setup
@@ -19,9 +19,9 @@ const PORT = process.env.PORT || 3000;
 // Security middleware
 app.use(helmet());
 
-// CORS configuration
+// CORS configuration - Updated for mobile device access
 app.use(cors({
-    origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : ['http://localhost:3000'],
+    origin: '*', // Just for development
     credentials: true
 }));
 
@@ -55,14 +55,49 @@ const upload = multer({
             'audio/mp3',
             'audio/wav',
             'audio/m4a',
-            'audio/aac'
+            'audio/aac',
+            'application/octet-stream' // Allow octet-stream and check extension
         ];
         
-        if (allowedTypes.includes(file.mimetype)) {
+        // Get file extension from original name
+        const fileExtension = file.originalname.split('.').pop()?.toLowerCase();
+        const allowedExtensions = ['txt', 'md', 'pdf', 'mp3', 'wav', 'm4a', 'aac'];
+        
+        // Check if file type is allowed OR if extension is allowed (for octet-stream files)
+        const isValidType = allowedTypes.includes(file.mimetype);
+        const isValidExtension = allowedExtensions.includes(fileExtension || '');
+        
+        if (isValidType || isValidExtension) {
+            // For octet-stream files, try to correct the MIME type based on extension
+            if (file.mimetype === 'application/octet-stream' && fileExtension) {
+                switch (fileExtension) {
+                    case 'mp3':
+                        file.mimetype = 'audio/mpeg';
+                        break;
+                    case 'wav':
+                        file.mimetype = 'audio/wav';
+                        break;
+                    case 'm4a':
+                        file.mimetype = 'audio/m4a';
+                        break;
+                    case 'aac':
+                        file.mimetype = 'audio/aac';
+                        break;
+                    case 'txt':
+                        file.mimetype = 'text/plain';
+                        break;
+                    case 'md':
+                        file.mimetype = 'text/markdown';
+                        break;
+                    case 'pdf':
+                        file.mimetype = 'application/pdf';
+                        break;
+                }
+            }
             cb(null, true);
         } else {
-            logger.warn(`File upload rejected - invalid type: ${file.mimetype}`);
-            cb(new Error('Invalid file type. Only text files and audio files are allowed.'), false);
+            logger.warn(`File upload rejected - invalid type: ${file.mimetype}, extension: ${fileExtension}`);
+            cb(new Error(`Invalid file type. Only text files and audio files are allowed. (Received: ${file.mimetype}, Extension: ${fileExtension})`), false);
         }
     }
 });
@@ -119,16 +154,6 @@ app.get('/health', (req, res) => {
 // File upload endpoint
 app.post('/upload', upload.single('story'), async (req, res) => {
     try {
-        // Validate environment variables
-        if (!process.env.AWS_S3_BUCKET_NAME || !process.env.AWS_REGION || 
-            !process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
-            logger.error('Missing required AWS configuration');
-            return res.status(500).json({
-                error: 'Server configuration error',
-                message: 'AWS configuration is incomplete'
-            });
-        }
-
         // Check if file was uploaded
         if (!req.file) {
             logger.warn('Upload attempt without file');
@@ -144,24 +169,56 @@ app.post('/upload', upload.single('story'), async (req, res) => {
         // Generate S3 key
         const s3Key = generateS3Key(file.originalname, file.mimetype);
 
-        // Upload to S3
-        const uploadResult = await uploadToS3(file, s3Key);
+        // TEST MODE: Skip AWS upload if in development and AWS not configured
+        const isTestMode = process.env.NODE_ENV !== 'production' && (
+            !process.env.AWS_S3_BUCKET_NAME || 
+            !process.env.AWS_REGION || 
+            !process.env.AWS_ACCESS_KEY_ID || 
+            !process.env.AWS_SECRET_ACCESS_KEY ||
+            process.env.TEST_MODE === 'true'
+        );
+
+        let uploadResult;
+        
+        if (isTestMode) {
+            // Simulate successful upload for testing
+            logger.info('Running in TEST MODE - simulating S3 upload');
+            uploadResult = {
+                Location: `https://test-bucket.s3.test-region.amazonaws.com/${s3Key}`,
+                Key: s3Key,
+                Bucket: 'test-bucket'
+            };
+        } else {
+            // Validate environment variables for production
+            if (!process.env.AWS_S3_BUCKET_NAME || !process.env.AWS_REGION || 
+                !process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
+                logger.error('Missing required AWS configuration');
+                return res.status(500).json({
+                    error: 'Server configuration error',
+                    message: 'AWS configuration is incomplete'
+                });
+            }
+            
+            // Upload to S3
+            uploadResult = await uploadToS3(file, s3Key);
+        }
 
         // Response
         const response = {
             success: true,
-            message: 'File uploaded successfully',
+            message: `File uploaded successfully${isTestMode ? ' (TEST MODE)' : ''}`,
             data: {
                 fileName: file.originalname,
                 fileSize: file.size,
                 fileType: file.mimetype,
                 s3Key: s3Key,
                 s3Location: uploadResult.Location,
-                uploadedAt: new Date().toISOString()
+                uploadedAt: new Date().toISOString(),
+                testMode: isTestMode
             }
         };
 
-        logger.info(`Upload completed successfully: ${file.originalname}`);
+        logger.info(`Upload completed successfully: ${file.originalname}${isTestMode ? ' (TEST MODE)' : ''}`);
         res.status(200).json(response);
 
     } catch (error) {
@@ -190,15 +247,128 @@ app.post('/upload', upload.single('story'), async (req, res) => {
     }
 });
 
-// Get uploaded stories (optional endpoint for listing files)
+// Get uploaded stories (list files from S3)
 app.get('/stories', async (req, res) => {
     try {
-        // This is a basic implementation - you might want to store metadata in a database
-        // For now, we'll return a simple response
-        res.status(200).json({
-            message: 'Stories endpoint - implement based on your needs',
-            suggestion: 'Consider storing file metadata in a database for better querying'
+        // Check if we're in test mode
+        const isTestMode = process.env.NODE_ENV !== 'production' && (
+            !process.env.AWS_S3_BUCKET_NAME || 
+            !process.env.AWS_REGION || 
+            !process.env.AWS_ACCESS_KEY_ID || 
+            !process.env.AWS_SECRET_ACCESS_KEY ||
+            process.env.TEST_MODE === 'true'
+        );
+
+        if (isTestMode) {
+            // Return mock data for testing
+            logger.info('Running in TEST MODE - returning mock stories');
+            return res.status(200).json({
+                success: true,
+                stories: [
+                    {
+                        fileName: 'sample-story.txt',
+                        fileSize: 1659,
+                        fileType: 'text/plain',
+                        s3Key: 'stories/text/2025-06-29/uuid-sample-story.txt',
+                        s3Location: 'https://test-bucket.s3.test-region.amazonaws.com/stories/text/2025-06-29/uuid-sample-story.txt',
+                        uploadedAt: '2025-06-29T10:30:00.000Z',
+                        category: 'text'
+                    },
+                    {
+                        fileName: 'bedtime-audio.mp3',
+                        fileSize: 2500000,
+                        fileType: 'audio/mpeg',
+                        s3Key: 'stories/audio/2025-06-29/uuid-bedtime-audio.mp3',
+                        s3Location: 'https://test-bucket.s3.test-region.amazonaws.com/stories/audio/2025-06-29/uuid-bedtime-audio.mp3',
+                        uploadedAt: '2025-06-29T11:15:00.000Z',
+                        category: 'audio'
+                    }
+                ],
+                testMode: true,
+                totalCount: 2
+            });
+        }
+
+        // Validate environment variables for S3 access
+        if (!process.env.AWS_S3_BUCKET_NAME || !process.env.AWS_REGION || 
+            !process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
+            logger.error('Missing required AWS configuration for stories listing');
+            return res.status(500).json({
+                error: 'Server configuration error',
+                message: 'AWS configuration is incomplete'
+            });
+        }
+
+        // List objects from S3 with 'stories/' prefix
+        const listCommand = new ListObjectsV2Command({
+            Bucket: process.env.AWS_S3_BUCKET_NAME,
+            Prefix: 'stories/',
+            MaxKeys: 100 // Limit for now, can add pagination later
         });
+
+        const result = await s3Client.send(listCommand);
+        
+        if (!result.Contents || result.Contents.length === 0) {
+            return res.status(200).json({
+                success: true,
+                stories: [],
+                totalCount: 0,
+                message: 'No stories found'
+            });
+        }
+
+        // Process and format the S3 objects
+        const stories = result.Contents
+            .filter(obj => obj.Key && obj.Key !== 'stories/') // Filter out folder entries
+            .map(obj => {
+                // Extract info from S3 key: stories/audio/2025-06-29/uuid-filename.mp3
+                const keyParts = obj.Key.split('/');
+                const category = keyParts[1]; // 'audio' or 'text'
+                const fileName = keyParts[3]?.split('-').slice(1).join('-') || obj.Key.split('/').pop();
+                
+                // Generate S3 URL
+                const s3Location = `https://${process.env.AWS_S3_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${obj.Key}`;
+                
+                // Determine file type from category and extension
+                const extension = fileName?.split('.').pop()?.toLowerCase();
+                let fileType = 'application/octet-stream';
+                
+                if (category === 'audio') {
+                    switch (extension) {
+                        case 'mp3': fileType = 'audio/mpeg'; break;
+                        case 'wav': fileType = 'audio/wav'; break;
+                        case 'm4a': fileType = 'audio/m4a'; break;
+                        case 'aac': fileType = 'audio/aac'; break;
+                    }
+                } else if (category === 'text') {
+                    switch (extension) {
+                        case 'txt': fileType = 'text/plain'; break;
+                        case 'md': fileType = 'text/markdown'; break;
+                        case 'pdf': fileType = 'application/pdf'; break;
+                    }
+                }
+
+                return {
+                    fileName: fileName || 'Unknown',
+                    fileSize: obj.Size || 0,
+                    fileType: fileType,
+                    s3Key: obj.Key,
+                    s3Location: s3Location,
+                    uploadedAt: obj.LastModified?.toISOString() || new Date().toISOString(),
+                    category: category || 'unknown'
+                };
+            })
+            .sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime()); // Sort by upload date, newest first
+
+        logger.info(`Retrieved ${stories.length} stories from S3`);
+        
+        res.status(200).json({
+            success: true,
+            stories: stories,
+            totalCount: stories.length,
+            testMode: false
+        });
+
     } catch (error) {
         logger.error('Error fetching stories:', error);
         res.status(500).json({
@@ -236,7 +406,7 @@ app.use('*', (req, res) => {
 });
 
 // Start server
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
     logger.info(`🚀 Bedtime Story Player Backend running on port ${PORT}`);
     logger.info(`📁 Environment: ${process.env.NODE_ENV || 'development'}`);
     logger.info(`🌍 Health check: http://localhost:${PORT}/health`);

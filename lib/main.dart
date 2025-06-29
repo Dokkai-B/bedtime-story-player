@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'screens/home_screen.dart';
 import 'screens/player_screen.dart';
 import 'screens/add_story_screen.dart';
+import 'screens/library_screen.dart';
 
 void main() {
   runApp(const BedtimeStoryPlayerApp());
@@ -22,6 +23,7 @@ class BedtimeStoryPlayerApp extends StatelessWidget {
         '/': (context) => const HomeScreen(),
         '/player': (context) => const PlayerScreen(),
         '/add': (context) => const AddStoryScreen(),
+        '/library': (context) => const LibraryScreen(),
       },
     );
   }
