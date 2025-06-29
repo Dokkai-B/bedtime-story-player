@@ -181,10 +181,26 @@ app.post('/upload', upload.single('story'), async (req, res) => {
         let uploadResult;
         
         if (isTestMode) {
-            // Simulate successful upload for testing
-            logger.info('Running in TEST MODE - simulating S3 upload');
+            // In test mode, save file to local test/samples directory
+            logger.info('Running in TEST MODE - saving file locally');
+            
+            const fs = require('fs');
+            const testSamplesDir = path.join(__dirname, 'test', 'samples');
+            
+            // Ensure the samples directory exists
+            if (!fs.existsSync(testSamplesDir)) {
+                fs.mkdirSync(testSamplesDir, { recursive: true });
+            }
+            
+            // Save the file with original name (or generate unique name if needed)
+            const fileName = file.originalname;
+            const localFilePath = path.join(testSamplesDir, fileName);
+            
+            // Write file to local directory
+            fs.writeFileSync(localFilePath, file.buffer);
+            
             uploadResult = {
-                Location: `https://test-bucket.s3.test-region.amazonaws.com/${s3Key}`,
+                Location: `http://192.168.68.109:${PORT}/file/${fileName}`,
                 Key: s3Key,
                 Bucket: 'test-bucket'
             };
@@ -247,10 +263,9 @@ app.post('/upload', upload.single('story'), async (req, res) => {
     }
 });
 
-// Get uploaded stories (list files from S3)
+// Update `/stories` endpoint to include uploaded files in test mode
 app.get('/stories', async (req, res) => {
     try {
-        // Check if we're in test mode
         const isTestMode = process.env.NODE_ENV !== 'production' && (
             !process.env.AWS_S3_BUCKET_NAME || 
             !process.env.AWS_REGION || 
@@ -260,32 +275,40 @@ app.get('/stories', async (req, res) => {
         );
 
         if (isTestMode) {
-            // Return mock data for testing
-            logger.info('Running in TEST MODE - returning mock stories');
+            const fs = require('fs');
+            const testSamplesDir = path.join(__dirname, 'test', 'samples');
+            // Use the host machine's actual IP address for Android emulator access
+            const baseUrl = `http://192.168.68.109:${PORT}`;
+
+            // Read files from the test samples directory
+            const files = fs.readdirSync(testSamplesDir).map(fileName => {
+                const filePath = path.join(testSamplesDir, fileName);
+                const stat = fs.statSync(filePath);
+                const extension = fileName.split('.').pop()?.toLowerCase();
+                let fileType = 'application/octet-stream';
+
+                if (['mp3', 'wav', 'm4a', 'aac'].includes(extension)) {
+                    fileType = `audio/${extension}`;
+                } else if (['txt', 'md', 'pdf'].includes(extension)) {
+                    fileType = extension === 'txt' ? 'text/plain' : extension === 'md' ? 'text/markdown' : 'application/pdf';
+                }
+
+                return {
+                    fileName,
+                    fileSize: stat.size,
+                    fileType,
+                    s3Key: `stories/test/${fileName}`,
+                    s3Location: `${baseUrl}/file/${fileName}`,
+                    uploadedAt: stat.mtime.toISOString(),
+                    category: fileType.startsWith('audio') ? 'audio' : 'text'
+                };
+            });
+
             return res.status(200).json({
                 success: true,
-                stories: [
-                    {
-                        fileName: 'sample-story.txt',
-                        fileSize: 1659,
-                        fileType: 'text/plain',
-                        s3Key: 'stories/text/2025-06-29/uuid-sample-story.txt',
-                        s3Location: 'https://test-bucket.s3.test-region.amazonaws.com/stories/text/2025-06-29/uuid-sample-story.txt',
-                        uploadedAt: '2025-06-29T10:30:00.000Z',
-                        category: 'text'
-                    },
-                    {
-                        fileName: 'bedtime-audio.mp3',
-                        fileSize: 2500000,
-                        fileType: 'audio/mpeg',
-                        s3Key: 'stories/audio/2025-06-29/uuid-bedtime-audio.mp3',
-                        s3Location: 'https://test-bucket.s3.test-region.amazonaws.com/stories/audio/2025-06-29/uuid-bedtime-audio.mp3',
-                        uploadedAt: '2025-06-29T11:15:00.000Z',
-                        category: 'audio'
-                    }
-                ],
-                testMode: true,
-                totalCount: 2
+                stories: files,
+                totalCount: files.length,
+                testMode: true
             });
         }
 
@@ -373,6 +396,112 @@ app.get('/stories', async (req, res) => {
         logger.error('Error fetching stories:', error);
         res.status(500).json({
             error: 'Failed to fetch stories',
+            message: error.message
+        });
+    }
+});
+
+// File serving endpoint for test mode
+app.get('/file/:storyId', async (req, res) => {
+    try {
+        const { storyId } = req.params;
+        
+        // Check if we're in test mode
+        const isTestMode = process.env.NODE_ENV !== 'production' && (
+            !process.env.AWS_S3_BUCKET_NAME || 
+            !process.env.AWS_REGION || 
+            !process.env.AWS_ACCESS_KEY_ID || 
+            !process.env.AWS_SECRET_ACCESS_KEY ||
+            process.env.TEST_MODE === 'true'
+        );
+
+        if (isTestMode) {
+            // For test mode, serve files from test/samples directory
+            const fs = require('fs');
+            const samplesDir = path.join(__dirname, 'test', 'samples');
+            const requestedFilePath = path.join(samplesDir, storyId);
+            
+            // Check if requested file exists
+            if (fs.existsSync(requestedFilePath)) {
+                const stat = fs.statSync(requestedFilePath);
+                const fileSize = stat.size;
+                const range = req.headers.range;
+                
+                // Determine content type based on file extension
+                const extension = path.extname(storyId).toLowerCase();
+                let contentType = 'application/octet-stream';
+                
+                switch (extension) {
+                    case '.mp3':
+                        contentType = 'audio/mpeg';
+                        break;
+                    case '.wav':
+                        contentType = 'audio/wav';
+                        break;
+                    case '.m4a':
+                        contentType = 'audio/m4a';
+                        break;
+                    case '.aac':
+                        contentType = 'audio/aac';
+                        break;
+                    case '.txt':
+                        contentType = 'text/plain';
+                        break;
+                    case '.md':
+                        contentType = 'text/markdown';
+                        break;
+                    case '.pdf':
+                        contentType = 'application/pdf';
+                        break;
+                }
+
+                if (range) {
+                    // Support range requests for audio streaming
+                    const parts = range.replace(/bytes=/, "").split("-");
+                    const start = parseInt(parts[0], 10);
+                    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+                    const chunksize = (end - start) + 1;
+                    const file = fs.createReadStream(requestedFilePath, { start, end });
+                    const head = {
+                        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+                        'Accept-Ranges': 'bytes',
+                        'Content-Length': chunksize,
+                        'Content-Type': contentType,
+                    };
+                    res.writeHead(206, head);
+                    file.pipe(res);
+                } else {
+                    // Serve entire file
+                    const head = {
+                        'Content-Length': fileSize,
+                        'Content-Type': contentType,
+                    };
+                    res.writeHead(200, head);
+                    fs.createReadStream(requestedFilePath).pipe(res);
+                }
+                
+                logger.info(`Serving file: ${storyId}`);
+                return;
+            } else {
+                logger.warn(`File not found: ${storyId}`);
+                return res.status(404).json({
+                    error: 'File not found',
+                    message: 'Requested file not available'
+                });
+            }
+        } else {
+            // In production, redirect to S3 URL or serve from S3
+            // This would require implementing S3 file streaming
+            return res.status(501).json({
+                error: 'Not implemented',
+                message: 'Production file serving not yet implemented'
+            });
+        }
+
+    } catch (error) {
+        logger.error('Error serving file:', error);
+        res.status(500).json({
+            error: 'Failed to serve file',
             message: error.message
         });
     }

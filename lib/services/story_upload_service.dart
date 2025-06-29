@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 
 class StoryUploadService {
   // Backend URL - Updated to use computer's IP address for mobile devices
+  // Use your PC's local IP address - matches the upload service
   static const String baseUrl = 'http://192.168.68.109:3000';
   
   /// Upload a file to the backend

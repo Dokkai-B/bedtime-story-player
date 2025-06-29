@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import '../widgets/audio_player_widget.dart';
 import '../widgets/controls_widget.dart';
 import '../widgets/seek_bar_widget.dart';
 
@@ -14,7 +13,16 @@ class PlayerScreen extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: const [
-            AudioPlayerWidget(),
+            Text(
+              'Audio Player',
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+            ),
+            SizedBox(height: 20),
+            Text(
+              'Use the Library to play your stories!',
+              style: TextStyle(fontSize: 16),
+            ),
+            SizedBox(height: 40),
             SeekBarWidget(),
             ControlsWidget(),
           ],

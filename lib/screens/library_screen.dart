@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import '../models/story.dart';
 import '../services/story_library_service.dart';
+import '../services/audio_player_service.dart';
+import '../widgets/audio_player_widget.dart';
 
 class LibraryScreen extends StatefulWidget {
   const LibraryScreen({super.key});
@@ -17,6 +19,10 @@ class _LibraryScreenState extends State<LibraryScreen> {
   String _selectedCategory = 'all';
   String _sortBy = 'date';
   String _searchQuery = '';
+  
+  // Audio player state
+  Story? _currentlyPlayingStory;
+  final AudioPlayerService _audioService = AudioPlayerService();
 
   final List<String> _categories = ['all', 'text', 'audio'];
   final List<String> _sortOptions = ['date', 'name', 'size'];
@@ -26,29 +32,45 @@ class _LibraryScreenState extends State<LibraryScreen> {
     super.initState();
     _loadStories();
   }
+  
+  @override
+  void dispose() {
+    _audioService.dispose();
+    super.dispose();
+  }
 
   Future<void> _loadStories() async {
+    if (!mounted) return;
+    
     try {
-      setState(() {
-        _isLoading = true;
-        _error = null;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoading = true;
+          _error = null;
+        });
+      }
 
       final stories = await StoryLibraryService.fetchStories();
-      setState(() {
-        _stories = stories;
-        _applyFilters();
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _stories = stories;
+          _applyFilters();
+          _isLoading = false;
+        });
+      }
     } catch (e) {
-      setState(() {
-        _error = e.toString();
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _error = e.toString();
+          _isLoading = false;
+        });
+      }
     }
   }
 
   void _applyFilters() {
+    if (!mounted) return;
+    
     var filtered = StoryLibraryService.filterByCategory(_stories, _selectedCategory);
     
     if (_searchQuery.isNotEmpty) {
@@ -58,12 +80,16 @@ class _LibraryScreenState extends State<LibraryScreen> {
     
     filtered = StoryLibraryService.sortStories(filtered, _sortBy);
     
-    setState(() {
-      _filteredStories = filtered;
-    });
+    if (mounted) {
+      setState(() {
+        _filteredStories = filtered;
+      });
+    }
   }
 
   void _onCategoryChanged(String? category) {
+    if (!mounted) return;
+    
     setState(() {
       _selectedCategory = category ?? 'all';
       _applyFilters();
@@ -71,6 +97,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   void _onSortChanged(String? sortBy) {
+    if (!mounted) return;
+    
     setState(() {
       _sortBy = sortBy ?? 'date';
       _applyFilters();
@@ -78,6 +106,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   void _onSearchChanged(String query) {
+    if (!mounted) return;
+    
     setState(() {
       _searchQuery = query;
       _applyFilters();
@@ -197,6 +227,18 @@ class _LibraryScreenState extends State<LibraryScreen> {
           Expanded(
             child: _buildContent(),
           ),
+          // Audio Player (shown when playing)
+          if (_currentlyPlayingStory != null)
+            AudioPlayerWidget(
+              story: _currentlyPlayingStory!,
+              onClose: () {
+                if (mounted) {
+                  setState(() {
+                    _currentlyPlayingStory = null;
+                  });
+                }
+              },
+            ),
         ],
       ),
     );
@@ -297,6 +339,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   Widget _buildStoryCard(Story story) {
+    final isCurrentlyPlaying = _currentlyPlayingStory?.s3Key == story.s3Key;
+    
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       elevation: 2,
@@ -366,6 +410,30 @@ class _LibraryScreenState extends State<LibraryScreen> {
                       ],
                     ),
                   ),
+                  
+                  // Play button for audio stories
+                  if (story.isAudio)
+                    Container(
+                      margin: const EdgeInsets.only(right: 8),
+                      decoration: BoxDecoration(
+                        color: isCurrentlyPlaying ? Colors.deepPurple : Colors.deepPurple.shade100,
+                        shape: BoxShape.circle,
+                      ),
+                      child: IconButton(
+                        onPressed: () => _onPlayButtonTap(story),
+                        icon: StreamBuilder<bool>(
+                          stream: _audioService.playingStream,
+                          builder: (context, snapshot) {
+                            final isPlaying = snapshot.data ?? false;
+                            return Icon(
+                              isCurrentlyPlaying && isPlaying ? Icons.pause : Icons.play_arrow,
+                              color: isCurrentlyPlaying ? Colors.white : Colors.deepPurple,
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                    
                   // Category Badge
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -422,13 +490,14 @@ class _LibraryScreenState extends State<LibraryScreen> {
             ElevatedButton.icon(
               onPressed: () {
                 Navigator.of(context).pop();
-                // TODO: Implement audio player
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Audio player coming soon!')),
-                );
+                _onPlayButtonTap(story);
               },
               icon: const Icon(Icons.play_arrow),
               label: const Text('Play'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.deepPurple,
+                foregroundColor: Colors.white,
+              ),
             ),
           if (story.isText)
             ElevatedButton.icon(
@@ -441,9 +510,51 @@ class _LibraryScreenState extends State<LibraryScreen> {
               },
               icon: const Icon(Icons.text_snippet),
               label: const Text('Read'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blue,
+                foregroundColor: Colors.white,
+              ),
             ),
         ],
       ),
     );
+  }
+
+  Future<void> _onPlayButtonTap(Story story) async {
+    if (!story.isAudio) return;
+
+    try {
+      final isCurrentStory = _currentlyPlayingStory?.s3Key == story.s3Key;
+      
+      if (isCurrentStory) {
+        // Toggle play/pause for current story
+        if (_audioService.isPlaying) {
+          await _audioService.pause();
+        } else {
+          await _audioService.resume();
+        }
+      } else {
+        // Play new story
+        if (mounted) {
+          setState(() {
+            _currentlyPlayingStory = story;
+          });
+        }
+        await _audioService.playFromUrl(story.s3Location, story.s3Key);
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to play audio: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      // If there was an error, clear the currently playing story
+      if (mounted) {
+        setState(() {
+          _currentlyPlayingStory = null;
+        });
+      }
+    }
   }
 }
