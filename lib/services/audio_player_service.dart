@@ -9,7 +9,12 @@ class AudioPlayerService {
   String? _currentStoryId;
   
   AudioPlayer get player {
-    _player ??= AudioPlayer();
+    if (_player == null) {
+      _player = AudioPlayer();
+      // Configure player for better seeking and buffering
+      _player!.setLoopMode(LoopMode.off);
+      _player!.setShuffleModeEnabled(false);
+    }
     return _player!;
   }
 
@@ -57,9 +62,56 @@ class AudioPlayerService {
     _currentStoryId = null;
   }
 
-  // Seek to position
+  // Seek to position with buffering wait
   Future<void> seekTo(Duration position) async {
-    await player.seek(position);
+    try {
+      // Store current playing state
+      final wasPlaying = player.playing;
+      
+      // Pause playback before seeking to avoid audio artifacts
+      if (wasPlaying) {
+        await player.pause();
+      }
+      
+      // Perform the seek
+      await player.seek(position);
+      
+      // Wait for buffering to complete before resuming
+      if (wasPlaying) {
+        // Wait a brief moment for buffer to stabilize
+        await Future.delayed(const Duration(milliseconds: 100));
+        
+        // Wait for player to be ready
+        await _waitForPlayerReady();
+        
+        // Resume playback
+        await player.play();
+      }
+    } catch (e) {
+      // If seek fails, try to recover by stopping and restarting
+      print('Seek error: $e, attempting recovery...');
+      await player.stop();
+      await Future.delayed(const Duration(milliseconds: 200));
+      await player.play();
+    }
+  }
+  
+  // Helper method to wait for player to be ready after seek
+  Future<void> _waitForPlayerReady() async {
+    try {
+      // Wait for the player to reach a ready state
+      await player.processingStateStream
+          .where((state) => 
+              state == ProcessingState.ready || 
+              state == ProcessingState.completed)
+          .timeout(
+            const Duration(seconds: 2),
+          )
+          .first;
+    } catch (e) {
+      // If timeout occurs, continue anyway to avoid hanging
+      print('Player ready timeout: $e');
+    }
   }
 
   // Set volume (0.0 to 1.0)

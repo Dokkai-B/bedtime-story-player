@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
 import '../models/story.dart';
 import '../services/audio_player_service.dart';
 
@@ -20,6 +21,9 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget> {
   final AudioPlayerService _audioService = AudioPlayerService();
   bool _isLoading = false;
   String? _error;
+  Timer? _seekDebounceTimer;
+  bool _isSeeking = false;
+  double? _seekingValue;
 
   @override
   Widget build(BuildContext context) {
@@ -143,18 +147,52 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget> {
                         ),
                         Expanded(
                           child: Slider(
-                            value: duration != null && duration.inMilliseconds > 0
-                                ? (position.inMilliseconds / duration.inMilliseconds)
-                                    .clamp(0.0, 1.0)
-                                : 0.0,
+                            value: _isSeeking && _seekingValue != null
+                                ? _seekingValue!
+                                : (duration != null && duration.inMilliseconds > 0
+                                    ? (position.inMilliseconds / duration.inMilliseconds)
+                                        .clamp(0.0, 1.0)
+                                    : 0.0),
+                            onChangeStart: (value) {
+                              setState(() {
+                                _isSeeking = true;
+                                _seekingValue = value;
+                              });
+                            },
                             onChanged: duration != null
                                 ? (value) {
-                                    final seekPosition = Duration(
-                                      milliseconds: (duration.inMilliseconds * value).round(),
-                                    );
-                                    _audioService.seekTo(seekPosition);
+                                    setState(() {
+                                      _seekingValue = value;
+                                    });
+                                    
+                                    // Cancel previous timer
+                                    _seekDebounceTimer?.cancel();
+                                    
+                                    // Set new timer for debounced seeking
+                                    _seekDebounceTimer = Timer(const Duration(milliseconds: 150), () {
+                                      if (mounted && duration != null) {
+                                        final seekPosition = Duration(
+                                          milliseconds: (duration.inMilliseconds * value).round(),
+                                        );
+                                        _performSeek(seekPosition);
+                                      }
+                                    });
                                   }
                                 : null,
+                            onChangeEnd: (value) {
+                              // Immediately seek on release for better UX
+                              if (duration != null && mounted) {
+                                _seekDebounceTimer?.cancel();
+                                final seekPosition = Duration(
+                                  milliseconds: (duration.inMilliseconds * value).round(),
+                                );
+                                _performSeek(seekPosition);
+                              }
+                              setState(() {
+                                _isSeeking = false;
+                                _seekingValue = null;
+                              });
+                            },
                             activeColor: Colors.deepPurple,
                             inactiveColor: Colors.deepPurple.shade100,
                           ),
@@ -178,9 +216,8 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget> {
                         IconButton(
                           onPressed: () {
                             final newPosition = position - const Duration(seconds: 15);
-                            _audioService.seekTo(
-                              newPosition < Duration.zero ? Duration.zero : newPosition,
-                            );
+                            final seekPosition = newPosition < Duration.zero ? Duration.zero : newPosition;
+                            _performSeek(seekPosition);
                           },
                           icon: const Icon(Icons.fast_rewind),
                           color: Colors.deepPurple.shade600,
@@ -222,7 +259,7 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget> {
                           onPressed: () {
                             final newPosition = position + const Duration(seconds: 15);
                             if (duration != null && newPosition < duration) {
-                              _audioService.seekTo(newPosition);
+                              _performSeek(newPosition);
                             }
                           },
                           icon: const Icon(Icons.fast_forward),
@@ -273,6 +310,24 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget> {
         });
       }
     }
+  }
+
+  Future<void> _performSeek(Duration position) async {
+    try {
+      await _audioService.seekTo(position);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = 'Seek failed: ${e.toString()}';
+        });
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _seekDebounceTimer?.cancel();
+    super.dispose();
   }
 
   String _formatDuration(Duration duration) {

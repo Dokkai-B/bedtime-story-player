@@ -192,16 +192,26 @@ app.post('/upload', upload.single('story'), async (req, res) => {
                 fs.mkdirSync(testSamplesDir, { recursive: true });
             }
             
-            // Save the file with original name (or generate unique name if needed)
-            const fileName = file.originalname;
-            const localFilePath = path.join(testSamplesDir, fileName);
+            // Save the file with original name (check if already exists and append number if needed)
+            let fileName = file.originalname;
+            let localFilePath = path.join(testSamplesDir, fileName);
+            let counter = 1;
+            
+            // If file exists, append a number
+            while (fs.existsSync(localFilePath)) {
+                const extension = path.extname(file.originalname);
+                const baseName = path.basename(file.originalname, extension);
+                fileName = `${baseName}_${counter}${extension}`;
+                localFilePath = path.join(testSamplesDir, fileName);
+                counter++;
+            }
             
             // Write file to local directory
             fs.writeFileSync(localFilePath, file.buffer);
             
             uploadResult = {
-                Location: `http://192.168.68.109:${PORT}/file/${fileName}`,
-                Key: s3Key,
+                Location: `http://192.168.68.109:${PORT}/file/${encodeURIComponent(fileName)}`,
+                Key: `stories/test/${fileName}`, // Use clean filename for consistency
                 Bucket: 'test-bucket'
             };
         } else {
@@ -294,11 +304,11 @@ app.get('/stories', async (req, res) => {
                 }
 
                 return {
-                    fileName,
+                    fileName: fileName, // Use actual filename as display name
                     fileSize: stat.size,
                     fileType,
                     s3Key: `stories/test/${fileName}`,
-                    s3Location: `${baseUrl}/file/${fileName}`,
+                    s3Location: `${baseUrl}/file/${encodeURIComponent(fileName)}`, // URL encode for safety
                     uploadedAt: stat.mtime.toISOString(),
                     category: fileType.startsWith('audio') ? 'audio' : 'text'
                 };
@@ -406,6 +416,11 @@ app.get('/file/:storyId', async (req, res) => {
     try {
         const { storyId } = req.params;
         
+        // Decode URL-encoded filename
+        const decodedStoryId = decodeURIComponent(storyId);
+        
+        logger.info(`File request: ${storyId} -> ${decodedStoryId}`);
+        
         // Check if we're in test mode
         const isTestMode = process.env.NODE_ENV !== 'production' && (
             !process.env.AWS_S3_BUCKET_NAME || 
@@ -419,7 +434,18 @@ app.get('/file/:storyId', async (req, res) => {
             // For test mode, serve files from test/samples directory
             const fs = require('fs');
             const samplesDir = path.join(__dirname, 'test', 'samples');
-            const requestedFilePath = path.join(samplesDir, storyId);
+            const requestedFilePath = path.join(samplesDir, decodedStoryId);
+            
+            // Security check: ensure file is within samples directory
+            const normalizedPath = path.normalize(requestedFilePath);
+            const normalizedSamplesDir = path.normalize(samplesDir);
+            if (!normalizedPath.startsWith(normalizedSamplesDir)) {
+                logger.warn(`Path traversal attempt blocked: ${decodedStoryId}`);
+                return res.status(403).json({
+                    error: 'Access denied',
+                    message: 'Invalid file path'
+                });
+            }
             
             // Check if requested file exists
             if (fs.existsSync(requestedFilePath)) {
@@ -428,7 +454,7 @@ app.get('/file/:storyId', async (req, res) => {
                 const range = req.headers.range;
                 
                 // Determine content type based on file extension
-                const extension = path.extname(storyId).toLowerCase();
+                const extension = path.extname(decodedStoryId).toLowerCase();
                 let contentType = 'application/octet-stream';
                 
                 switch (extension) {
@@ -455,35 +481,60 @@ app.get('/file/:storyId', async (req, res) => {
                         break;
                 }
 
+                // Set CORS headers for audio access
+                res.set({
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+                    'Access-Control-Allow-Headers': 'Range, Content-Range',
+                    'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length'
+                });
+
                 if (range) {
                     // Support range requests for audio streaming
                     const parts = range.replace(/bytes=/, "").split("-");
                     const start = parseInt(parts[0], 10);
                     const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-                    const chunksize = (end - start) + 1;
-                    const file = fs.createReadStream(requestedFilePath, { start, end });
+                    
+                    // Ensure we don't exceed file bounds
+                    const validStart = Math.max(0, Math.min(start, fileSize - 1));
+                    const validEnd = Math.max(validStart, Math.min(end, fileSize - 1));
+                    const chunksize = (validEnd - validStart) + 1;
+                    
+                    // Create read stream with high water mark for better buffering
+                    const file = fs.createReadStream(requestedFilePath, { 
+                        start: validStart, 
+                        end: validEnd,
+                        highWaterMark: 64 * 1024 // 64KB chunks for smoother streaming
+                    });
+                    
                     const head = {
-                        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+                        'Content-Range': `bytes ${validStart}-${validEnd}/${fileSize}`,
                         'Accept-Ranges': 'bytes',
                         'Content-Length': chunksize,
                         'Content-Type': contentType,
+                        'Cache-Control': 'public, max-age=3600', // Allow caching for 1 hour
                     };
                     res.writeHead(206, head);
                     file.pipe(res);
                 } else {
-                    // Serve entire file
+                    // Serve entire file with optimized streaming
                     const head = {
                         'Content-Length': fileSize,
                         'Content-Type': contentType,
+                        'Accept-Ranges': 'bytes',
+                        'Cache-Control': 'public, max-age=3600', // Allow caching for 1 hour
                     };
                     res.writeHead(200, head);
-                    fs.createReadStream(requestedFilePath).pipe(res);
+                    const fileStream = fs.createReadStream(requestedFilePath, {
+                        highWaterMark: 64 * 1024 // 64KB chunks
+                    });
+                    fileStream.pipe(res);
                 }
                 
-                logger.info(`Serving file: ${storyId}`);
+                logger.info(`Serving file: ${decodedStoryId}`);
                 return;
             } else {
-                logger.warn(`File not found: ${storyId}`);
+                logger.warn(`File not found: ${decodedStoryId}`);
                 return res.status(404).json({
                     error: 'File not found',
                     message: 'Requested file not available'

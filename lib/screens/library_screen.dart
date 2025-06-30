@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/story.dart';
 import '../services/story_library_service.dart';
 import '../services/audio_player_service.dart';
-import '../widgets/audio_player_widget.dart';
+import '../widgets/expandable_audio_player.dart';
 
 class LibraryScreen extends StatefulWidget {
   const LibraryScreen({super.key});
@@ -128,44 +128,46 @@ class _LibraryScreenState extends State<LibraryScreen> {
           ),
         ],
       ),
-      body: Column(
+      body: Stack(
         children: [
-          // Search and Filter Section
-          Container(
-            padding: const EdgeInsets.all(16.0),
-            color: Colors.grey[100],
-            child: Column(
-              children: [
-                // Search Bar
-                TextField(
-                  decoration: InputDecoration(
-                    hintText: 'Search stories...',
-                    prefixIcon: const Icon(Icons.search),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    filled: true,
-                    fillColor: Colors.white,
-                  ),
-                  onChanged: _onSearchChanged,
-                ),
-                const SizedBox(height: 12),
-                // Filter Row
-                Row(
+          Column(
+            children: [
+              // Search and Filter Section
+              Container(
+                padding: const EdgeInsets.all(16.0),
+                color: Colors.grey[100],
+                child: Column(
                   children: [
-                    // Category Filter
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
-                        value: _selectedCategory,
-                        decoration: InputDecoration(
-                          labelText: 'Category',
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          filled: true,
-                          fillColor: Colors.white,
+                    // Search Bar
+                    TextField(
+                      decoration: InputDecoration(
+                        hintText: 'Search stories...',
+                        prefixIcon: const Icon(Icons.search),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
                         ),
-                        items: _categories.map((category) {
+                        filled: true,
+                        fillColor: Colors.white,
+                      ),
+                      onChanged: _onSearchChanged,
+                    ),
+                    const SizedBox(height: 12),
+                    // Filter Row
+                    Row(
+                      children: [
+                        // Category Filter
+                        Expanded(
+                          child: DropdownButtonFormField<String>(
+                            value: _selectedCategory,
+                            decoration: InputDecoration(
+                              labelText: 'Category',
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              filled: true,
+                              fillColor: Colors.white,
+                            ),
+                            items: _categories.map((category) {
                           return DropdownMenuItem(
                             value: category,
                             child: Row(
@@ -225,22 +227,35 @@ class _LibraryScreenState extends State<LibraryScreen> {
           ),
           // Content Area
           Expanded(
-            child: _buildContent(),
-          ),
-          // Audio Player (shown when playing)
-          if (_currentlyPlayingStory != null)
-            AudioPlayerWidget(
-              story: _currentlyPlayingStory!,
-              onClose: () {
-                if (mounted) {
-                  setState(() {
-                    _currentlyPlayingStory = null;
-                  });
-                }
-              },
+            child: Padding(
+              padding: EdgeInsets.only(
+                bottom: _currentlyPlayingStory != null ? 72.0 : 0.0,
+              ),
+              child: _buildContent(),
             ),
+          ),
         ],
       ),
+      
+      // Expandable Audio Player (shown when playing)
+      if (_currentlyPlayingStory != null)
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: ExpandableAudioPlayer(
+            story: _currentlyPlayingStory!,
+            onClose: () {
+              if (mounted) {
+                setState(() {
+                  _currentlyPlayingStory = null;
+                });
+              }
+            },
+          ),
+        ),
+    ],
+  ),
     );
   }
 
