@@ -1,23 +1,70 @@
 <!DOCTYPE html>
 <html>
+
 <head>
     <title>Bedtime Story Upload Test</title>
     <style>
-        body { font-family: Arial, sans-serif; margin: 40px; }
-        .container { max-width: 600px; margin: 0 auto; }
-        .test-section { background: #f5f5f5; padding: 20px; margin: 20px 0; border-radius: 5px; }
-        button { background: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; }
-        button:hover { background: #0056b3; }
-        .result { margin-top: 15px; padding: 10px; border-radius: 4px; }
-        .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
-        .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
-        pre { background: #f8f9fa; padding: 10px; border-radius: 4px; overflow-x: auto; }
+        body {
+            font-family: Arial, sans-serif;
+            margin: 40px;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        .test-section {
+            background: #f5f5f5;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 5px;
+        }
+
+        button {
+            background: #007bff;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #0056b3;
+        }
+
+        .result {
+            margin-top: 15px;
+            padding: 10px;
+            border-radius: 4px;
+        }
+
+        .success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        pre {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
     </style>
 </head>
+
 <body>
     <div class="container">
         <h1>🧪 Bedtime Story Backend Test</h1>
-        
+
         <div class="test-section">
             <h3>1. Health Check Test</h3>
             <button onclick="testHealth()">Test Health Endpoint</button>
@@ -46,7 +93,7 @@
             try {
                 const response = await fetch(`${API_BASE}/health`);
                 const data = await response.json();
-                
+
                 if (response.ok) {
                     resultDiv.innerHTML = `<div class="result success">✅ Health check passed<pre>${JSON.stringify(data, null, 2)}</pre></div>`;
                 } else {
@@ -60,7 +107,7 @@
         async function testUpload() {
             const resultDiv = document.getElementById('uploadResult');
             const fileInput = document.getElementById('fileInput');
-            
+
             if (!fileInput.files[0]) {
                 resultDiv.innerHTML = `<div class="result error">❌ Please select a file first</div>`;
                 return;
@@ -74,9 +121,9 @@
                     method: 'POST',
                     body: formData
                 });
-                
+
                 const data = await response.json();
-                
+
                 if (response.ok) {
                     resultDiv.innerHTML = `<div class="result success">✅ Upload successful<pre>${JSON.stringify(data, null, 2)}</pre></div>`;
                 } else {
@@ -92,7 +139,7 @@
             try {
                 const response = await fetch(`${API_BASE}/stories`);
                 const data = await response.json();
-                
+
                 if (response.ok) {
                     resultDiv.innerHTML = `<div class="result success">✅ Stories endpoint works<pre>${JSON.stringify(data, null, 2)}</pre></div>`;
                 } else {
@@ -104,9 +151,10 @@
         }
 
         // Test health on page load
-        window.onload = function() {
+        window.onload = function () {
             testHealth();
         };
     </script>
 </body>
+
 </html>

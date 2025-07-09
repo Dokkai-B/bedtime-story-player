@@ -1,11 +1,11 @@
 import 'dart:io';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import '../config/app_config.dart';
 
 class StoryUploadService {
-  // Backend URL - Updated to use computer's IP address for mobile devices
-  // Use your PC's local IP address - matches the upload service
-  static const String baseUrl = 'http://192.168.68.109:3000';
+  // Backend URL - Uses centralized configuration
+  static String get baseUrl => AppConfig.baseUrl;
   
   /// Upload a file to the backend
   /// Returns a Map with upload details including S3 location

@@ -287,8 +287,22 @@ app.get('/stories', async (req, res) => {
         if (isTestMode) {
             const fs = require('fs');
             const testSamplesDir = path.join(__dirname, 'test', 'samples');
-            // Use the host machine's actual IP address for Android emulator access
-            const baseUrl = `http://192.168.68.109:${PORT}`;
+            
+            // Dynamic base URL - use the request host (supports tunnels like ngrok/localtunnel)
+            const forwardedProto = req.headers['x-forwarded-proto'];
+            const host = req.headers['x-forwarded-host'] || req.headers.host || `192.168.68.109:${PORT}`;
+            
+            // Determine protocol - if host contains .loca.lt or other tunnel services, use https
+            let protocol;
+            if (host.includes('.loca.lt') || host.includes('.ngrok.io') || host.includes('.serveo.net')) {
+                protocol = 'https';
+            } else if (forwardedProto && typeof forwardedProto === 'string') {
+                protocol = forwardedProto.split(',')[0].trim(); // Take first protocol if multiple
+            } else {
+                protocol = req.connection.encrypted ? 'https' : 'http';
+            }
+            
+            const baseUrl = `${protocol}://${host}`;
 
             // Read files from the test samples directory
             const files = fs.readdirSync(testSamplesDir).map(fileName => {
