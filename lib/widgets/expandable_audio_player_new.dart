@@ -26,6 +26,7 @@ class _ExpandableAudioPlayerState extends State<ExpandableAudioPlayer>
   bool _isSeeking = false;
   double? _seekingValue;
   bool _isExpanded = false;
+  Story? _currentTrack; // Track the current playing track
   
   late AnimationController _animationController;
   late Animation<double> _heightAnimation;
@@ -35,6 +36,16 @@ class _ExpandableAudioPlayerState extends State<ExpandableAudioPlayer>
   void initState() {
     super.initState();
     _initializeAnimations();
+    _currentTrack = widget.story; // Initialize with the passed story
+    
+    // Listen to current track changes
+    _audioService.currentTrackStream.listen((track) {
+      if (mounted && track != null) {
+        setState(() {
+          _currentTrack = track;
+        });
+      }
+    });
   }
 
   void _initializeAnimations() {
@@ -157,7 +168,7 @@ class _ExpandableAudioPlayerState extends State<ExpandableAudioPlayer>
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
                               Text(
-                                widget.story.title,
+                                _currentTrack?.title ?? widget.story.title,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(
@@ -193,22 +204,13 @@ class _ExpandableAudioPlayerState extends State<ExpandableAudioPlayer>
                             shape: BoxShape.circle,
                           ),
                           child: IconButton(
-                            onPressed: _isLoading ? null : _togglePlayPause,
+                            onPressed: _togglePlayPause,
                             padding: EdgeInsets.zero,
-                            icon: _isLoading
-                                ? SizedBox(
-                                    width: 16,
-                                    height: 16,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                                    ),
-                                  )
-                                : Icon(
-                                    isPlaying ? Icons.pause : Icons.play_arrow,
-                                    color: Colors.white,
-                                    size: 18,
-                                  ),
+                            icon: Icon(
+                              isPlaying ? Icons.pause : Icons.play_arrow,
+                              color: Colors.white,
+                              size: 18,
+                            ),
                           ),
                         ),
                       ],
@@ -335,7 +337,7 @@ class _ExpandableAudioPlayerState extends State<ExpandableAudioPlayer>
                                     
                                     // Title
                                     Text(
-                                      widget.story.title,
+                                      _currentTrack?.title ?? widget.story.title,
                                       style: const TextStyle(
                                         fontSize: 20,
                                         fontWeight: FontWeight.bold,
@@ -492,22 +494,18 @@ class _ExpandableAudioPlayerState extends State<ExpandableAudioPlayer>
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
           children: [
-            // Skip back 15s
+            // Previous track (using fast_rewind icon)
             Container(
               width: 40,
               height: 40,
               decoration: BoxDecoration(
-                color: Colors.deepPurple.shade50,
+                color: _audioService.hasPrevious ? Colors.deepPurple.shade50 : Colors.grey.shade200,
                 shape: BoxShape.circle,
               ),
               child: IconButton(
-                onPressed: () {
-                  final newPosition = position - const Duration(seconds: 15);
-                  final seekPosition = newPosition < Duration.zero ? Duration.zero : newPosition;
-                  _performSeek(seekPosition);
-                },
+                onPressed: _audioService.hasPrevious ? _previousTrack : null,
                 icon: const Icon(Icons.fast_rewind),
-                color: Colors.deepPurple.shade600,
+                color: _audioService.hasPrevious ? Colors.deepPurple.shade600 : Colors.grey.shade400,
                 iconSize: 20,
                 padding: EdgeInsets.zero,
               ),
@@ -529,44 +527,37 @@ class _ExpandableAudioPlayerState extends State<ExpandableAudioPlayer>
                 ],
               ),
               child: IconButton(
-                onPressed: _isLoading ? null : _togglePlayPause,
+                onPressed: _togglePlayPause,
                 padding: EdgeInsets.zero,
-                icon: _isLoading
-                    ? SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                            Colors.white,
-                          ),
-                        ),
-                      )
-                    : Icon(
-                        isPlaying ? Icons.pause : Icons.play_arrow,
-                        color: Colors.white,
-                        size: 28,
-                      ),
+                icon: Icon(
+                  isPlaying ? Icons.pause : Icons.play_arrow,
+                  color: Colors.white,
+                  size: 28,
+                ),
               ),
             ),
             
-            // Skip forward 15s
+            // Next track (using fast_forward icon)
             Container(
               width: 40,
               height: 40,
               decoration: BoxDecoration(
-                color: Colors.deepPurple.shade50,
+                color: _audioService.hasNext ? Colors.deepPurple.shade50 : Colors.grey.shade200,
                 shape: BoxShape.circle,
               ),
               child: IconButton(
-                onPressed: () {
-                  final newPosition = position + const Duration(seconds: 15);
-                  if (duration != null && newPosition < duration) {
-                    _performSeek(newPosition);
-                  }
-                },
+                onPressed: _audioService.hasNext ? _nextTrack : null,
                 icon: const Icon(Icons.fast_forward),
-                color: Colors.deepPurple.shade600,
+                color: _audioService.hasNext ? Colors.deepPurple.shade600 : Colors.grey.shade400,
+                iconSize: 20,
+                padding: EdgeInsets.zero,
+              ),
+            ),
+          ],
+        ),
+                onPressed: _audioService.hasNext ? _nextTrack : null,
+                icon: const Icon(Icons.skip_next),
+                color: _audioService.hasNext ? Colors.deepPurple.shade600 : Colors.grey.shade400,
                 iconSize: 20,
                 padding: EdgeInsets.zero,
               ),
@@ -580,11 +571,6 @@ class _ExpandableAudioPlayerState extends State<ExpandableAudioPlayer>
   Future<void> _togglePlayPause() async {
     if (!mounted) return;
     
-    setState(() {
-      _isLoading = true;
-      _error = null;
-    });
-
     try {
       if (_audioService.isCurrentStory(widget.story.s3Key)) {
         // Current story is loaded
@@ -594,19 +580,13 @@ class _ExpandableAudioPlayerState extends State<ExpandableAudioPlayer>
           await _audioService.resume();
         }
       } else {
-        // Load and play new story
-        await _audioService.playFromUrl(widget.story.s3Location, widget.story.s3Key);
+        // Load and play new story (force play for manual selection)
+        await _audioService.forcePlayFromUrl(widget.story.s3Location, widget.story.s3Key);
       }
     } catch (e) {
       if (mounted) {
         setState(() {
           _error = e.toString();
-        });
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
         });
       }
     }
@@ -619,6 +599,35 @@ class _ExpandableAudioPlayerState extends State<ExpandableAudioPlayer>
       if (mounted) {
         setState(() {
           _error = 'Seek failed: ${e.toString()}';
+        });
+      }
+    }
+  }
+
+  // Track navigation methods - SIMPLIFIED
+  Future<void> _nextTrack() async {
+    if (!mounted || !_audioService.hasNext) return;
+    
+    try {
+      await _audioService.nextTrack();
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = 'Failed to play next track: ${e.toString()}';
+        });
+      }
+    }
+  }
+
+  Future<void> _previousTrack() async {
+    if (!mounted || !_audioService.hasPrevious) return;
+    
+    try {
+      await _audioService.previousTrack();
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = 'Failed to play previous track: ${e.toString()}';
         });
       }
     }

@@ -294,8 +294,8 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget> {
           await _audioService.resume();
         }
       } else {
-        // Load and play new story
-        await _audioService.playFromUrl(widget.story.s3Location, widget.story.s3Key);
+        // Load and play new story (force play for manual selection)
+        await _audioService.forcePlayFromUrl(widget.story.s3Location, widget.story.s3Key);
       }
     } catch (e) {
       if (mounted) {

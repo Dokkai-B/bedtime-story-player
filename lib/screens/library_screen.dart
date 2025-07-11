@@ -549,13 +549,19 @@ class _LibraryScreenState extends State<LibraryScreen> {
           await _audioService.resume();
         }
       } else {
-        // Play new story
+        // Play new story - initialize playlist
         if (mounted) {
           setState(() {
             _currentlyPlayingStory = story;
           });
         }
-        await _audioService.playFromUrl(story.s3Location, story.s3Key);
+        
+        // Set up playlist with all audio stories
+        final audioStories = _filteredStories.where((s) => s.isAudio).toList();
+        final currentIndex = audioStories.indexWhere((s) => s.s3Key == story.s3Key);
+        
+        _audioService.setPlaylist(audioStories, initialIndex: currentIndex >= 0 ? currentIndex : 0);
+        await _audioService.forcePlayFromUrl(story.s3Location, story.s3Key);
       }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
